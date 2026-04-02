@@ -4,94 +4,145 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>新品首销通报工具</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=1.4.0">
 </head>
 <body>
-    <div class="container">
+    <div class="page-shell">
+        <main class="page">
 
-        <header class="hero">
-            <h1>新品首销通报工具</h1>
-            <p>上传数据 → 自动生成 → 一键复制</p>
-            <div class="author">by zhi </div>
-        </header>
+            <header class="hero">
+                <div class="hero-title-row">
+                    <h1>新品首销通报工具</h1>
+                    <span class="hero-badge">V1.4.0</span>
+                </div>
+                <p class="hero-subtitle">上传数据 → 自动生成 → 一键复制</p>
+                <div class="hero-meta">by zhi</div>
+            </header>
 
-        <section class="card">
-            <div class="section-head">
-                <div class="section-title">输入区</div>
-                <div class="section-sub">上传原表、模板并设置首销参数</div>
-            </div>
-
-            <div class="grid-2">
-                <div class="form-item">
-                    <label>微服务原表</label>
-                    <input type="file" id="dataFile">
-                    <span>上传 SalesReport 原始导出文件</span>
+            <section class="card">
+                <div class="section-head">
+                    <div>
+                        <h2>输入区</h2>
+                        <p>上传原表、模板并设置首销参数</p>
+                    </div>
                 </div>
 
-                <div class="form-item">
-                    <label>模板文件</label>
-                    <input type="file" id="templateFile">
-                    <span>用于匹配客户与门店</span>
-                </div>
-            </div>
+                <div class="form-grid form-grid-2">
+                    <div class="field">
+                        <label for="dataFile">微服务原表</label>
+                        <input type="file" id="dataFile">
+                        <div class="field-tip">上传 SalesReport 原始导出文件</div>
+                        <div class="file-name" id="dataFileName">未选择文件</div>
+                    </div>
 
-            <div class="grid-1">
-                <div class="form-item">
-                    <label>首销日期</label>
-                    <input type="date" id="launchDate">
-                    <span>用于计算首销日与首销5日</span>
-                </div>
-            </div>
-
-            <div class="grid-2">
-                <div class="form-item">
-                    <label>产品1</label>
-                    <input type="text" id="p1" placeholder="例如：90 Plus">
+                    <div class="field">
+                        <label for="templateFile">模板文件</label>
+                        <input type="file" id="templateFile">
+                        <div class="field-tip">用于匹配客户与门店</div>
+                        <div class="file-name" id="templateFileName">未选择文件</div>
+                    </div>
                 </div>
 
-                <div class="form-item">
-                    <label>产品2</label>
-                    <input type="text" id="p2" placeholder="例如：90 Pro Max">
+                <div class="form-grid form-grid-1">
+                    <div class="field">
+                        <label for="launchDate">首销日期</label>
+                        <input type="date" id="launchDate">
+                        <div class="field-tip">用于计算首销日与首销 5 日</div>
+                    </div>
                 </div>
-            </div>
 
-            <div class="action">
-                <button class="btn-primary" onclick="run()">生成首销通报</button>
-            </div>
-        </section>
+                <div class="form-grid form-grid-2">
+                    <div class="field">
+                        <label for="p1">产品 1</label>
+                        <input type="text" id="p1" placeholder="例如：90 Plus">
+                    </div>
 
-        <section class="card">
-            <div class="section-head">
-                <div class="section-title">概览</div>
-                <div class="section-sub">本次生成结果摘要</div>
-            </div>
-            <div id="summary" class="box box-small">等待生成</div>
-        </section>
+                    <div class="field">
+                        <label for="p2">产品 2</label>
+                        <input type="text" id="p2" placeholder="例如：90 Pro Max">
+                    </div>
+                </div>
 
-        <section class="card">
-            <div class="title-line">
-                <span>首销通报（首销日）</span>
-                <button class="btn-light" onclick="copy('report_day')">复制</button>
-            </div>
-            <div id="report_day" class="box"></div>
-        </section>
+                <div class="action-row">
+                    <button class="btn btn-primary" id="runBtn" onclick="run()">生成首销通报</button>
+                </div>
+            </section>
 
-        <section class="card">
-            <div class="title-line">
-                <span>首销通报（首销5日）</span>
-                <button class="btn-light" onclick="copy('report_5day')">复制</button>
-            </div>
-            <div id="report_5day" class="box"></div>
-        </section>
+            <section class="card">
+                <div class="section-head">
+                    <div>
+                        <h2>概览</h2>
+                        <p>本次生成结果摘要</p>
+                    </div>
+                </div>
+                <div id="summary" class="result-box summary-box">等待生成</div>
+            </section>
 
-        <section class="download">
-            <a href="/download/结果.xlsx">📊 结果文件</a>
-            <a href="/download/运行日志.txt">📄 运行日志</a>
-            <a href="/download/通报模板.xlsx">📥 下载模板</a>
-        </section>
+            <section class="card">
+                <div class="section-head section-head-inline">
+                    <div>
+                        <h2>首销通报（首销日）</h2>
+                        <p>复制后可直接发送</p>
+                    </div>
+                    <button class="btn btn-secondary" onclick="copy('report_day')">复制</button>
+                </div>
+                <div id="report_day" class="result-box report-box"></div>
+            </section>
 
+            <section class="card">
+                <div class="section-head section-head-inline">
+                    <div>
+                        <h2>首销通报（首销 5 日）</h2>
+                        <p>复制后可直接发送</p>
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-secondary" onclick="copy('report_5day')">复制</button>
+                        <button class="btn btn-secondary" onclick="copyAll()">复制全部</button>
+                    </div>
+                </div>
+                <div id="report_5day" class="result-box report-box"></div>
+            </section>
+
+            <section class="card">
+                <div class="section-head">
+                    <div>
+                        <h2>下载区</h2>
+                        <p>结果文件与标准模板</p>
+                    </div>
+                </div>
+
+                <div class="download-grid">
+                    <a class="download-item" href="/download/结果.xlsx">
+                        <span class="download-icon">📊</span>
+                        <span class="download-text">
+                            <strong>结果文件</strong>
+                            <small>下载结果.xlsx</small>
+                        </span>
+                    </a>
+
+                    <a class="download-item" href="/download/运行日志.txt">
+                        <span class="download-icon">📄</span>
+                        <span class="download-text">
+                            <strong>运行日志</strong>
+                            <small>下载运行日志.txt</small>
+                        </span>
+                    </a>
+
+                    <a class="download-item" href="/download-template">
+                        <span class="download-icon">📥</span>
+                        <span class="download-text">
+                            <strong>标准模板</strong>
+                            <small>下载标准模板.xlsx</small>
+                        </span>
+                    </a>
+                </div>
+            </section>
+
+        </main>
     </div>
 
-    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <div id="toast" class="toast"></div>
+
+    <script src="{{ url_for('static', filename='app.js') }}?v=1.4.0"></script>
 </body>
 </html>

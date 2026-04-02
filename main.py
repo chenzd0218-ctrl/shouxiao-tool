@@ -17,12 +17,14 @@ from openpyxl import load_workbook
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 LOG_FILE = os.path.join(OUTPUT_DIR, "运行日志.txt")
 OUTPUT_RESULT_XLSX = os.path.join(OUTPUT_DIR, "结果.xlsx")
 OUTPUT_REPORT_TXT = os.path.join(OUTPUT_DIR, "通报.txt")
 OUTPUT_TEMPLATE_XLSX = os.path.join(OUTPUT_DIR, "通报模板.xlsx")
 OUTPUT_STANDARD_XLSX = os.path.join(OUTPUT_DIR, "标准销量表.xlsx")
+FIXED_TEMPLATE_FILE = os.path.join(ASSETS_DIR, "通报模板.xlsx")
 
 # 到客户 sheet 固定列
 CUSTOMER_COLS = {
@@ -48,6 +50,7 @@ app = Flask(__name__)
 def ensure_dirs():
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(ASSETS_DIR, exist_ok=True)
 
 
 def reset_log():
@@ -61,6 +64,11 @@ def log(msg: str):
     print(line)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+
+def check_fixed_template():
+    if not os.path.exists(FIXED_TEMPLATE_FILE):
+        log("警告：assets/通报模板.xlsx 不存在，网页端模板下载将不可用")
 
 
 def safe_str(x) -> str:
@@ -122,12 +130,10 @@ def contains_match(text: str, candidates):
     if not nt:
         return ""
 
-    # 先精确
     for item in candidates:
         if norm(item) == nt:
             return item
 
-    # 再包含
     for item in candidates:
         ni = norm(item)
         if ni and (ni in nt or nt in ni):
@@ -172,7 +178,7 @@ def copy_template_to_output(template_path: str):
 def load_template(template_file: str):
     wb = load_workbook(template_file)
     if "到客户" not in wb.sheetnames or "到门店" not in wb.sheetnames:
-        raise ValueError("模板缺少工作表：到客户 / 到门店")
+        raise ValueError("模板错误：必须包含【到客户】和【到门店】两个工作表")
 
     ws_customer = wb["到客户"]
     ws_store = wb["到门店"]
@@ -256,19 +262,14 @@ def clean_and_match(df: pd.DataFrame, customers, stores, store_to_guide, p1: str
 
     df = df.copy()
 
-    # 先过滤明显无效
     df = df[df["产品名称"].map(lambda x: safe_str(x) != "")]
     df = df[df["SN"].map(lambda x: safe_str(x) != "")]
 
-    # 产品匹配
     df["产品分类"] = df["产品名称"].map(lambda x: fuzzy_match_product(x, p1, p2))
-
-    # 客户/门店匹配
     df["模板客户"] = df["原始客户"].map(lambda x: contains_match(x, customers))
     df["模板门店"] = df["原始门店"].map(lambda x: contains_match(x, stores))
     df["模板导购"] = df["模板门店"].map(lambda x: store_to_guide.get(x, ""))
 
-    # 日期口径
     if df["销售日期"].notna().any():
         df["首销日标记"] = (df["销售日期"] == launch_dt).astype(int)
         df["首销5日标记"] = ((df["销售日期"] >= launch_dt) & (df["销售日期"] <= end_5d)).astype(int)
@@ -276,7 +277,6 @@ def clean_and_match(df: pd.DataFrame, customers, stores, store_to_guide, p1: str
         df["首销日标记"] = 1
         df["首销5日标记"] = 1
 
-    # 有效数据
     valid = df[
         (df["产品分类"].notna()) &
         (df["模板客户"] != "") &
@@ -284,7 +284,6 @@ def clean_and_match(df: pd.DataFrame, customers, stores, store_to_guide, p1: str
         (df["SN"] != "")
     ].copy()
 
-    # 去重口径：门店 + SN + 产品
     day_df = valid[valid["首销日标记"] == 1].copy()
     day_df = day_df.drop_duplicates(subset=["模板门店", "SN", "产品分类"])
     day_df["数量"] = 1
@@ -293,7 +292,6 @@ def clean_and_match(df: pd.DataFrame, customers, stores, store_to_guide, p1: str
     d5_df = d5_df.drop_duplicates(subset=["模板门店", "SN", "产品分类"])
     d5_df["数量"] = 1
 
-    # 标准销量表
     std = valid.drop_duplicates(subset=["模板门店", "SN", "产品分类"]).copy()
     std.to_excel(OUTPUT_STANDARD_XLSX, index=False)
 
@@ -599,6 +597,20 @@ def download(filename):
     return send_from_directory(OUTPUT_DIR, filename, as_attachment=True)
 
 
+@app.route("/download-template")
+def download_template():
+    if not os.path.exists(FIXED_TEMPLATE_FILE):
+        return jsonify({"ok": False, "msg": "标准模板不存在，请先在 assets 目录放入：通报模板.xlsx"}), 404
+
+    return send_from_directory(
+        ASSETS_DIR,
+        "通报模板.xlsx",
+        as_attachment=True
+    )
+
+
 if __name__ == "__main__":
     ensure_dirs()
+    reset_log()
+    check_fixed_template()
     app.run(debug=True)
