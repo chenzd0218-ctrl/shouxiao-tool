@@ -130,16 +130,44 @@ def contains_match(text: str, candidates):
     if not nt:
         return ""
 
+    # 先精确
     for item in candidates:
         if norm(item) == nt:
             return item
 
+    # 再包含
     for item in candidates:
         ni = norm(item)
         if ni and (ni in nt or nt in ni):
             return item
 
     return ""
+
+
+def find_value_by_fuzzy_key(data_dict, template_name, prod_key):
+    """
+    data_dict 例如:
+    {
+        ("建设街联启华为授权体验店", "P1"): 2,
+        ("联启", "P1"): 3
+    }
+    """
+    # 1. 先精确
+    if (template_name, prod_key) in data_dict:
+        return data_dict[(template_name, prod_key)]
+
+    nt = norm(template_name)
+
+    # 2. 再模糊
+    for (real_name, real_prod), value in data_dict.items():
+        if real_prod != prod_key:
+            continue
+
+        nr = norm(real_name)
+        if nt and nr and (nt in nr or nr in nt):
+            return value
+
+    return 0
 
 
 def customer_group_name(name: str) -> str:
@@ -331,11 +359,11 @@ def fill_customer_sheet(ws, day_data, d5_data):
         if not name or "合计" in name or "总计" in name:
             continue
 
-        ws.cell(r, CUSTOMER_COLS["DAY_P1"]).value = day_data["customer"].get((name, "P1"), 0)
-        ws.cell(r, CUSTOMER_COLS["D5_P1"]).value = d5_data["customer"].get((name, "P1"), 0)
+        ws.cell(r, CUSTOMER_COLS["DAY_P1"]).value = find_value_by_fuzzy_key(day_data["customer"], name, "P1")
+        ws.cell(r, CUSTOMER_COLS["D5_P1"]).value = find_value_by_fuzzy_key(d5_data["customer"], name, "P1")
 
-        ws.cell(r, CUSTOMER_COLS["DAY_P2"]).value = day_data["customer"].get((name, "P2"), 0)
-        ws.cell(r, CUSTOMER_COLS["D5_P2"]).value = d5_data["customer"].get((name, "P2"), 0)
+        ws.cell(r, CUSTOMER_COLS["DAY_P2"]).value = find_value_by_fuzzy_key(day_data["customer"], name, "P2")
+        ws.cell(r, CUSTOMER_COLS["D5_P2"]).value = find_value_by_fuzzy_key(d5_data["customer"], name, "P2")
 
 
 def fill_store_sheet(ws, day_data, d5_data):
@@ -344,11 +372,11 @@ def fill_store_sheet(ws, day_data, d5_data):
         if not name or "合计" in name or "总计" in name:
             continue
 
-        ws.cell(r, STORE_COLS["DAY_P1"]).value = day_data["store"].get((name, "P1"), 0)
-        ws.cell(r, STORE_COLS["D5_P1"]).value = d5_data["store"].get((name, "P1"), 0)
+        ws.cell(r, STORE_COLS["DAY_P1"]).value = find_value_by_fuzzy_key(day_data["store"], name, "P1")
+        ws.cell(r, STORE_COLS["D5_P1"]).value = find_value_by_fuzzy_key(d5_data["store"], name, "P1")
 
-        ws.cell(r, STORE_COLS["DAY_P2"]).value = day_data["store"].get((name, "P2"), 0)
-        ws.cell(r, STORE_COLS["D5_P2"]).value = d5_data["store"].get((name, "P2"), 0)
+        ws.cell(r, STORE_COLS["DAY_P2"]).value = find_value_by_fuzzy_key(day_data["store"], name, "P2")
+        ws.cell(r, STORE_COLS["D5_P2"]).value = find_value_by_fuzzy_key(d5_data["store"], name, "P2")
 
 
 # ===================== 文本通报 =====================
