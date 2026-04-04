@@ -5,12 +5,13 @@ from collections import OrderedDict
 from uuid import uuid4
 
 import pandas as pd
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
 from openpyxl import load_workbook
 
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+TEMPLATE_ASSET_PATH = os.path.join(BASE_DIR, "assets", "模板.xlsx")
 
 LOG_FILE = os.path.join(OUTPUT_DIR, "运行日志.txt")
 OUTPUT_RESULT_XLSX = os.path.join(OUTPUT_DIR, "结果.xlsx")
@@ -297,7 +298,17 @@ def process():
         log(err)
         log(tb)
         return jsonify({"ok": False, "msg": err})
+    
+@app.route("/download-template")
+def download_template():
+    if not os.path.exists(TEMPLATE_ASSET_PATH):
+        return "模板文件不存在", 404
 
+    return send_file(
+        TEMPLATE_ASSET_PATH,
+        as_attachment=True,
+        download_name="模板.xlsx"
+    )
 
 @app.route("/download/<path:filename>")
 def download_file(filename):
