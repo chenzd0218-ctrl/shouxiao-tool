@@ -1,9 +1,6 @@
-cat > .gitignore <<EOF
-.vscode/
 __pycache__/
 *.pyc
 .DS_Store
-
 uploads/
 output/
-EOF
+.env

@@ -1,74 +1,159 @@
-function highlight(text) {
-    if (!text) return "";
-
-    let html = text;
-
-    html = html.replace(/(合计[：:]\s*)(\d+)(\s*台)?/g, '$1<span class="sum">$2</span>$3');
-    html = html.replace(/([：:]\s*)(\d+)(\s*台)/g, '$1<span class="num">$2</span>$3');
-
-    return html;
+function setStatus(text, type) {
+    const status = document.getElementById("status");
+    status.className = "status " + type;
+    status.textContent = "当前状态：" + text;
 }
 
-function showToast(message) {
-    const toast = document.getElementById("toast");
-    toast.innerText = message;
-    toast.classList.add("show");
-    clearTimeout(window.__toastTimer);
-    window.__toastTimer = setTimeout(() => {
-        toast.classList.remove("show");
-    }, 1800);
-}
-
-function updateFileName(inputId, outputId) {
+function bindFileName(inputId, textId) {
     const input = document.getElementById(inputId);
-    const output = document.getElementById(outputId);
-    if (!input || !output) return;
+    const text = document.getElementById(textId);
 
-    const file = input.files && input.files[0];
-    output.innerText = file ? file.name : "未选择文件";
+    input.addEventListener("change", function () {
+        const file = input.files[0];
+        text.textContent = file ? file.name : "未选择文件";
+    });
 }
 
-async function run() {
-    const dataFile = document.getElementById("dataFile");
-    const templateFile = document.getElementById("templateFile");
-    const launchDate = document.getElementById("launchDate");
-    const p1 = document.getElementById("p1");
-    const p2 = document.getElementById("p2");
-    const summary = document.getElementById("summary");
-    const reportDay = document.getElementById("report_day");
-    const report5Day = document.getElementById("report_5day");
-    const btn = document.getElementById("runBtn");
+bindFileName("data_file", "data_file_name");
+bindFileName("template_file", "template_file_name");
 
-    if (!dataFile.files[0]) {
-        showToast("请先上传微服务原表");
-        dataFile.focus();
+function renderSummary(containerId, products, customerRows) {
+    const container = document.getElementById(containerId);
+
+    if (!customerRows || customerRows.length === 0) {
+        container.innerHTML = '<div class="summary-empty">暂无数据</div>';
         return;
     }
 
-    if (!templateFile.files[0]) {
-        showToast("请先上传模板文件");
-        templateFile.focus();
+    const productTotals = {};
+    products.forEach(p => productTotals[p] = 0);
+
+    customerRows.forEach(row => {
+        products.forEach(p => {
+            productTotals[p] += Number(row[p] || 0);
+        });
+    });
+
+    const total = customerRows.reduce((sum, row) => sum + Number(row["合计"] || 0), 0);
+
+    let html = "";
+
+    products.forEach(p => {
+        html += `
+            <div class="summary-item">
+                <div class="summary-label">${p}</div>
+                <div class="summary-value">${productTotals[p]}台</div>
+                <div class="summary-note">单产品销量</div>
+            </div>
+        `;
+    });
+
+    html += `
+        <div class="summary-item total">
+            <div class="summary-label">合计</div>
+            <div class="summary-value">${total}台</div>
+            <div class="summary-note">全部产品总销量</div>
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
+function cellClass(value) {
+    const num = Number(value || 0);
+    return num === 0 ? "zero-value" : "";
+}
+
+function renderTable(containerId, rows, products, isStore = false) {
+    const container = document.getElementById(containerId);
+
+    if (!rows || rows.length === 0) {
+        container.innerHTML = '<div class="table-placeholder">暂无数据</div>';
         return;
     }
 
-    if (!launchDate.value) {
-        showToast("请选择首销日期");
-        launchDate.focus();
+    const headers = isStore
+        ? ["门店名称", "导购", ...products, "合计"]
+        : ["客户名称", ...products, "合计"];
+
+    const tableClass = isStore ? "store-table" : "customer-table";
+
+    let html = `<div class="table-wrap"><table class="${tableClass}"><thead><tr>`;
+    headers.forEach(h => {
+        html += `<th>${h}</th>`;
+    });
+    html += "</tr></thead><tbody>";
+
+    rows.forEach(row => {
+        html += "<tr>";
+
+        if (isStore) {
+            html += `<td title="${row["门店名称"] || ""}">${row["门店名称"] || ""}</td>`;
+            html += `<td title="${row["导购"] || ""}">${row["导购"] || ""}</td>`;
+        } else {
+            html += `<td title="${row["客户名称"] || ""}">${row["客户名称"] || ""}</td>`;
+        }
+
+        products.forEach(p => {
+            const value = row[p] ?? 0;
+            html += `<td class="${cellClass(value)}">${value}</td>`;
+        });
+
+        const total = row["合计"] ?? 0;
+        html += `<td>${total}</td>`;
+        html += "</tr>";
+    });
+
+    html += "</tbody></table></div>";
+    container.innerHTML = html;
+}
+
+function renderDownloads(resultFile, logFile) {
+    const box = document.getElementById("downloads");
+    box.innerHTML = `
+        <a class="download-btn" href="/download/${resultFile}" target="_blank">输出通报</a>
+        <a class="download-btn" href="#" onclick="alert('固定模板请直接使用本地模板文件'); return false;">固定模板</a>
+        <a class="download-btn" href="/download/${logFile}" target="_blank">运行日志</a>
+    `;
+}
+
+document.getElementById("runBtn").addEventListener("click", async function () {
+    const runBtn = document.getElementById("runBtn");
+
+    const dataFile = document.getElementById("data_file").files[0];
+    const templateFile = document.getElementById("template_file").files[0];
+
+    const product1 = document.getElementById("product1").value.trim();
+    const product2 = document.getElementById("product2").value.trim();
+    const product3 = document.getElementById("product3").value.trim();
+    const product4 = document.getElementById("product4").value.trim();
+
+    if (!dataFile) {
+        setStatus("请先上传微服务原表", "error");
+        return;
+    }
+
+    if (!templateFile) {
+        setStatus("请先上传模板文件", "error");
+        return;
+    }
+
+    if (!product1) {
+        setStatus("产品1必填", "error");
         return;
     }
 
     const formData = new FormData();
-    formData.append("data_file", dataFile.files[0]);
-    formData.append("template_file", templateFile.files[0]);
-    formData.append("launch_date", launchDate.value);
-    formData.append("p1", p1.value);
-    formData.append("p2", p2.value);
+    formData.append("data_file", dataFile);
+    formData.append("template_file", templateFile);
+    formData.append("product1", product1);
+    formData.append("product2", product2);
+    formData.append("product3", product3);
+    formData.append("product4", product4);
 
-    btn.disabled = true;
-    btn.innerText = "生成中...";
-    summary.innerText = "处理中，请稍候...";
-    reportDay.innerHTML = "";
-    report5Day.innerHTML = "";
+    runBtn.disabled = true;
+    runBtn.textContent = "生成中";
+    setStatus("处理中", "processing");
 
     try {
         const res = await fetch("/process", {
@@ -78,52 +163,23 @@ async function run() {
 
         const data = await res.json();
 
-        if (data.ok) {
-            summary.innerText = data.summary || "完成";
-            reportDay.innerHTML = highlight(data.report_day || "");
-            report5Day.innerHTML = highlight(data.report_5day || "");
-            showToast("生成成功");
-            reportDay.scrollIntoView({ behavior: "smooth", block: "start" });
-        } else {
-            summary.innerText = data.msg || "处理失败";
-            showToast("处理失败");
+        if (!data.ok) {
+            setStatus("处理失败：" + data.msg, "error");
+            runBtn.disabled = false;
+            runBtn.textContent = "开始生成";
+            return;
         }
+
+        setStatus("处理完成", "success");
+        renderSummary("summary", data.products, data.customer_rows);
+        renderTable("customer_preview", data.customer_rows, data.products, false);
+        renderTable("store_preview", data.store_rows, data.products, true);
+        renderDownloads(data.result_file, data.log_file);
+
     } catch (e) {
-        summary.innerText = "失败：" + e;
-        showToast("请求失败");
-    } finally {
-        btn.disabled = false;
-        btn.innerText = "生成首销通报";
-    }
-}
-
-function copy(id) {
-    const text = document.getElementById(id).innerText;
-    navigator.clipboard.writeText(text);
-    showToast("已复制");
-}
-
-function copyAll() {
-    const day = document.getElementById("report_day").innerText || "";
-    const d5 = document.getElementById("report_5day").innerText || "";
-    const text = `${day}\n\n${d5}`.trim();
-    navigator.clipboard.writeText(text);
-    showToast("已复制全部通报");
-}
-
-document.addEventListener("DOMContentLoaded", function () {
-    const dataFile = document.getElementById("dataFile");
-    const templateFile = document.getElementById("templateFile");
-
-    if (dataFile) {
-        dataFile.addEventListener("change", function () {
-            updateFileName("dataFile", "dataFileName");
-        });
+        setStatus("请求失败：" + e, "error");
     }
 
-    if (templateFile) {
-        templateFile.addEventListener("change", function () {
-            updateFileName("templateFile", "templateFileName");
-        });
-    }
+    runBtn.disabled = false;
+    runBtn.textContent = "开始生成";
 });

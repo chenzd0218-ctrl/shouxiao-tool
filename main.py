@@ -1,56 +1,29 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
-import re
-import shutil
+import glob
 import traceback
-from datetime import datetime
+from collections import OrderedDict
+from uuid import uuid4
 
 import pandas as pd
-from flask import Flask, request, jsonify, send_from_directory, render_template
+from flask import Flask, render_template, request, jsonify, send_from_directory
 from openpyxl import load_workbook
 
-
-# ===================== 基础配置 =====================
-
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 
 LOG_FILE = os.path.join(OUTPUT_DIR, "运行日志.txt")
 OUTPUT_RESULT_XLSX = os.path.join(OUTPUT_DIR, "结果.xlsx")
-OUTPUT_REPORT_TXT = os.path.join(OUTPUT_DIR, "通报.txt")
-OUTPUT_TEMPLATE_XLSX = os.path.join(OUTPUT_DIR, "通报模板.xlsx")
-OUTPUT_STANDARD_XLSX = os.path.join(OUTPUT_DIR, "标准销量表.xlsx")
-FIXED_TEMPLATE_FILE = os.path.join(ASSETS_DIR, "通报模板.xlsx")
 
-# 到客户 sheet 固定列
-CUSTOMER_COLS = {
-    "DAY_P1": 9,
-    "D5_P1": 12,
-    "DAY_P2": 18,
-    "D5_P2": 21,
-}
-
-# 到门店 sheet 固定列
-STORE_COLS = {
-    "DAY_P1": 5,
-    "D5_P1": 8,
-    "DAY_P2": 12,
-    "D5_P2": 15,
-}
+CUSTOMER_SHEET = "到客户"
+STORE_SHEET = "到门店"
 
 app = Flask(__name__)
 
 
-# ===================== 通用工具 =====================
-
-def ensure_dirs():
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
+def ensure_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(ASSETS_DIR, exist_ok=True)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 def reset_log():
@@ -59,208 +32,84 @@ def reset_log():
 
 
 def log(msg: str):
-    now = datetime.now().strftime("%H:%M:%S")
-    line = f"[{now}] {msg}"
-    print(line)
+    print(msg)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+        f.write(msg + "\n")
 
 
-def check_fixed_template():
-    if not os.path.exists(FIXED_TEMPLATE_FILE):
-        log("警告：assets/通报模板.xlsx 不存在，网页端模板下载将不可用")
-
-
-def safe_str(x) -> str:
+def safe_str(x):
     return "" if pd.isna(x) else str(x).strip()
 
 
-def norm(x) -> str:
-    s = safe_str(x)
-    s = s.lower()
-    s = s.replace("　", " ").replace("\n", " ").replace("\r", " ")
-    s = re.sub(r"\s+", "", s)
-    s = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]", "", s)
-    return s
+def norm(x):
+    return (
+        safe_str(x)
+        .replace(" ", "")
+        .replace("　", "")
+        .replace("\n", "")
+        .replace("\r", "")
+        .lower()
+    )
+
+
+def parse_products(product_list):
+    products = [safe_str(x) for x in product_list if safe_str(x)]
+    products = list(dict.fromkeys(products))
+    if not products:
+        raise ValueError("请至少填写1个产品")
+    if len(products) > 4:
+        raise ValueError("最多支持4个产品")
+    return products
 
 
 def detect_column(df: pd.DataFrame, candidates):
-    norm_cols = {norm(c): c for c in df.columns}
-    for cand in candidates:
-        nc = norm(cand)
-        if nc in norm_cols:
-            return norm_cols[nc]
+    col_map = {norm(c): c for c in df.columns}
+    for c in candidates:
+        nc = norm(c)
+        if nc in col_map:
+            return col_map[nc]
     return None
 
 
-def extract_brandless(text: str) -> str:
-    s = norm(text)
-    for word in ["huawei", "华为", "荣耀", "honor", "oppo", "vivo", "xiaomi", "redmi", "apple", "苹果"]:
-        s = s.replace(word, "")
-    return s
-
-
-def fuzzy_match_product(raw_name: str, p1: str, p2: str):
-    raw = norm(raw_name)
-    raw2 = extract_brandless(raw_name)
-
-    p1n = norm(p1)
-    p2n = norm(p2)
-    p1b = extract_brandless(p1)
-    p2b = extract_brandless(p2)
-
-    def matched(src_a, src_b, target_a, target_b):
-        if not target_a:
-            return False
-        return (
-            target_a in src_a or src_a in target_a or
-            target_a in src_b or src_b in target_a or
-            (target_b and (target_b in src_a or src_a in target_b or target_b in src_b or src_b in target_b))
-        )
-
-    if matched(raw, raw2, p1n, p1b):
-        return "P1"
-    if matched(raw, raw2, p2n, p2b):
-        return "P2"
+def match_product(name: str, products):
+    n = norm(name)
+    for p in products:
+        if norm(p) in n:
+            return p
     return None
 
 
-def contains_match(text: str, candidates):
-    nt = norm(text)
-    if not nt:
-        return ""
-
-    # 先精确
-    for item in candidates:
-        if norm(item) == nt:
-            return item
-
-    # 再包含
-    for item in candidates:
-        ni = norm(item)
-        if ni and (ni in nt or nt in ni):
-            return item
-
-    return ""
-
-
-def find_value_by_fuzzy_key(data_dict, template_name, prod_key):
-    """
-    data_dict 例如:
-    {
-        ("建设街联启华为授权体验店", "P1"): 2,
-        ("联启", "P1"): 3
-    }
-    """
-    # 1. 先精确
-    if (template_name, prod_key) in data_dict:
-        return data_dict[(template_name, prod_key)]
-
-    nt = norm(template_name)
-
-    # 2. 再模糊
-    for (real_name, real_prod), value in data_dict.items():
-        if real_prod != prod_key:
-            continue
-
-        nr = norm(real_name)
-        if nt and nr and (nt in nr or nr in nt):
-            return value
-
-    return 0
-
-
-def customer_group_name(name: str) -> str:
-    s = safe_str(name)
-    if "联启" in s:
-        return "联启"
-    if "朝龙" in s:
-        return "朝龙"
-    if "同文" in s:
-        return "同文"
-    if "九机" in s:
-        return "九机"
-    return "其他客户"
-
-
-def store_short_name(name: str) -> str:
-    s = safe_str(name)
-    s = re.sub(r"^(云南省)?曲靖市宣威市", "", s)
-    s = s.replace("联启通讯", "")
-    s = s.replace("华为授权体验店", "体验店")
-    s = s.replace("华为体验店", "体验店")
-    return s.strip() or safe_str(name)
-
-
-def format_dt_cn(dt: pd.Timestamp) -> str:
-    dt = pd.to_datetime(dt)
-    return f"{dt.month}月{dt.day}日"
-
-
-def copy_template_to_output(template_path: str):
-    shutil.copyfile(template_path, OUTPUT_TEMPLATE_XLSX)
-
-
-# ===================== 读取模板 =====================
-
-def load_template(template_file: str):
-    wb = load_workbook(template_file)
-    if "到客户" not in wb.sheetnames or "到门店" not in wb.sheetnames:
-        raise ValueError("模板错误：必须包含【到客户】和【到门店】两个工作表")
-
-    ws_customer = wb["到客户"]
-    ws_store = wb["到门店"]
-
-    customers = []
-    for r in range(2, ws_customer.max_row + 1):
-        name = safe_str(ws_customer.cell(r, 1).value)
-        if name and "合计" not in name and "总计" not in name:
-            customers.append(name)
-
-    stores = []
-    store_to_guide = {}
-    for r in range(3, ws_store.max_row + 1):
-        store_name = safe_str(ws_store.cell(r, 1).value)
-        guide_name = safe_str(ws_store.cell(r, 2).value)
-        if store_name and "合计" not in store_name and "总计" not in store_name:
-            stores.append(store_name)
-            store_to_guide[store_name] = guide_name
-
-    return wb, ws_customer, ws_store, customers, stores, store_to_guide
-
-
-# ===================== 读取原表 =====================
-
-def read_data(data_file: str) -> pd.DataFrame:
-    df = pd.read_excel(data_file)
+def load_data(file, products):
+    df = pd.read_excel(file)
 
     customer_col = detect_column(df, ["所属客户渠道名称", "客户渠道名称", "客户名称", "渠道名称"])
     store_col = detect_column(df, ["门店名称", "门店", "门店名"])
     sn_col = detect_column(df, ["SN", "sn", "sn码", "sn号"])
-    date_col = detect_column(df, ["销售日期", "日期", "激活日期", "开票日期"])
     promoter_col = detect_column(df, ["促销员姓名", "促销员", "导购", "导购员"])
     seller_col = detect_column(df, ["销售人姓名", "销售人", "店员姓名"])
+    product_col = (
+        detect_column(df, ["传播名"])
+        or detect_column(df, ["产品型号"])
+        or detect_column(df, ["Offering别称"])
+        or detect_column(df, ["产品名称"])
+        or detect_column(df, ["机型名称"])
+        or detect_column(df, ["商品名称"])
+    )
 
-    if not customer_col or not store_col or not sn_col:
-        raise ValueError("原表缺少必要字段：客户 / 门店 / SN")
-
-    product_cols = []
-    for c in ["传播名", "产品型号", "Offering别称", "产品名称", "机型名称", "商品名称"]:
-        real = detect_column(df, [c])
-        if real:
-            product_cols.append(real)
-
-    if not product_cols:
-        raise ValueError("原表缺少产品字段：传播名 / 产品型号 / Offering别称 / 产品名称")
+    if not customer_col:
+        raise ValueError("原表缺少客户字段")
+    if not store_col:
+        raise ValueError("原表缺少门店字段")
+    if not sn_col:
+        raise ValueError("原表缺少SN字段")
+    if not product_col:
+        raise ValueError("原表缺少产品字段")
 
     out = pd.DataFrame()
-    out["原始客户"] = df[customer_col].map(lambda x: safe_str(x).split("_")[0])
-    out["原始门店"] = df[store_col].map(safe_str)
+    out["客户名称"] = df[customer_col].map(lambda x: safe_str(x).split("_")[0])
+    out["门店名称"] = df[store_col].map(safe_str)
     out["SN"] = df[sn_col].map(safe_str)
-
-    out["产品名称"] = ""
-    for c in product_cols:
-        out["产品名称"] = (out["产品名称"] + " " + df[c].fillna("").astype(str)).str.strip()
+    out["产品名称"] = df[product_col].map(safe_str)
 
     if promoter_col and seller_col:
         out["导购"] = df.apply(
@@ -274,297 +123,133 @@ def read_data(data_file: str) -> pd.DataFrame:
     else:
         out["导购"] = ""
 
-    if date_col:
-        out["销售日期"] = pd.to_datetime(df[date_col], errors="coerce").dt.normalize()
-    else:
-        out["销售日期"] = pd.NaT
+    out["产品归类"] = out["产品名称"].map(lambda x: match_product(x, products))
 
-    return out
-
-
-# ===================== 清洗 / 匹配 / 分期 =====================
-
-def clean_and_match(df: pd.DataFrame, customers, stores, store_to_guide, p1: str, p2: str, launch_date: str):
-    launch_dt = pd.to_datetime(launch_date).normalize()
-    end_5d = launch_dt + pd.Timedelta(days=4)
-
-    df = df.copy()
-
-    df = df[df["产品名称"].map(lambda x: safe_str(x) != "")]
-    df = df[df["SN"].map(lambda x: safe_str(x) != "")]
-
-    df["产品分类"] = df["产品名称"].map(lambda x: fuzzy_match_product(x, p1, p2))
-    df["模板客户"] = df["原始客户"].map(lambda x: contains_match(x, customers))
-    df["模板门店"] = df["原始门店"].map(lambda x: contains_match(x, stores))
-    df["模板导购"] = df["模板门店"].map(lambda x: store_to_guide.get(x, ""))
-
-    if df["销售日期"].notna().any():
-        df["首销日标记"] = (df["销售日期"] == launch_dt).astype(int)
-        df["首销5日标记"] = ((df["销售日期"] >= launch_dt) & (df["销售日期"] <= end_5d)).astype(int)
-    else:
-        df["首销日标记"] = 1
-        df["首销5日标记"] = 1
-
-    valid = df[
-        (df["产品分类"].notna()) &
-        (df["模板客户"] != "") &
-        (df["模板门店"] != "") &
-        (df["SN"] != "")
+    out = out[
+        (out["产品归类"].notna()) &
+        (out["客户名称"] != "") &
+        (out["门店名称"] != "") &
+        (out["SN"] != "")
     ].copy()
 
-    day_df = valid[valid["首销日标记"] == 1].copy()
-    day_df = day_df.drop_duplicates(subset=["模板门店", "SN", "产品分类"])
-    day_df["数量"] = 1
-
-    d5_df = valid[valid["首销5日标记"] == 1].copy()
-    d5_df = d5_df.drop_duplicates(subset=["模板门店", "SN", "产品分类"])
-    d5_df["数量"] = 1
-
-    std = valid.drop_duplicates(subset=["模板门店", "SN", "产品分类"]).copy()
-    std.to_excel(OUTPUT_STANDARD_XLSX, index=False)
-
-    log(f"原始数据：{len(df)}")
-    log(f"有效数据：{len(std)}")
-    log(f"首销日有效：{len(day_df)}")
-    log(f"首销5日有效：{len(d5_df)}")
-
-    return day_df, d5_df, std
-
-
-# ===================== 聚合 =====================
-
-def build_agg(df: pd.DataFrame):
-    result = {
-        "region": {},
-        "customer": {},
-        "store": {},
-        "guide": {},
-    }
-
-    if df.empty:
-        return result
-
-    result["region"] = df.groupby("产品分类")["数量"].sum().to_dict()
-    result["customer"] = df.groupby(["模板客户", "产品分类"])["数量"].sum().to_dict()
-    result["store"] = df.groupby(["模板门店", "产品分类"])["数量"].sum().to_dict()
-    result["guide"] = df.groupby(["模板导购", "产品分类"])["数量"].sum().to_dict()
-    return result
-
-
-# ===================== 回填 Excel =====================
-
-def fill_customer_sheet(ws, day_data, d5_data):
-    for r in range(2, ws.max_row + 1):
-        name = safe_str(ws.cell(r, 1).value)
-        if not name or "合计" in name or "总计" in name:
-            continue
-
-        ws.cell(r, CUSTOMER_COLS["DAY_P1"]).value = find_value_by_fuzzy_key(day_data["customer"], name, "P1")
-        ws.cell(r, CUSTOMER_COLS["D5_P1"]).value = find_value_by_fuzzy_key(d5_data["customer"], name, "P1")
-
-        ws.cell(r, CUSTOMER_COLS["DAY_P2"]).value = find_value_by_fuzzy_key(day_data["customer"], name, "P2")
-        ws.cell(r, CUSTOMER_COLS["D5_P2"]).value = find_value_by_fuzzy_key(d5_data["customer"], name, "P2")
-
-
-def fill_store_sheet(ws, day_data, d5_data):
-    for r in range(3, ws.max_row + 1):
-        name = safe_str(ws.cell(r, 1).value)
-        if not name or "合计" in name or "总计" in name:
-            continue
-
-        ws.cell(r, STORE_COLS["DAY_P1"]).value = find_value_by_fuzzy_key(day_data["store"], name, "P1")
-        ws.cell(r, STORE_COLS["D5_P1"]).value = find_value_by_fuzzy_key(d5_data["store"], name, "P1")
-
-        ws.cell(r, STORE_COLS["DAY_P2"]).value = find_value_by_fuzzy_key(day_data["store"], name, "P2")
-        ws.cell(r, STORE_COLS["D5_P2"]).value = find_value_by_fuzzy_key(d5_data["store"], name, "P2")
-
-
-# ===================== 文本通报 =====================
-
-def build_group_customer(customers, result, prod_key):
-    out = {
-        "联启": 0,
-        "朝龙": 0,
-        "同文": 0,
-        "九机": 0,
-        "其他客户": 0,
-    }
-    for c in customers:
-        grp = customer_group_name(c)
-        out[grp] += result["customer"].get((c, prod_key), 0)
+    out = out.drop_duplicates(subset=["客户名称", "门店名称", "产品归类", "SN"]).copy()
     return out
 
 
-def build_store_lines(stores, result):
+def build_customer_rows(df, products):
+    ordered_customers = list(OrderedDict.fromkeys(df["客户名称"].tolist()))
+
     rows = []
-    for s in stores:
-        p1 = result["store"].get((s, "P1"), 0)
-        p2 = result["store"].get((s, "P2"), 0)
-        total = p1 + p2
-        rows.append({
-            "name": s,
-            "short": store_short_name(s),
-            "p1": p1,
-            "p2": p2,
-            "total": total,
-        })
+    for customer in ordered_customers:
+        sub = df[df["客户名称"] == customer]
+        row = {"客户名称": customer}
+        total = 0
+        for p in products:
+            qty = int((sub["产品归类"] == p).sum())
+            row[p] = qty
+            total += qty
+        row["合计"] = total
+        rows.append(row)
+
+    rows = sorted(rows, key=lambda x: x["合计"], reverse=True)
     return rows
 
 
-def build_guide_lines(store_to_guide, result):
-    guide_names = []
-    for _, guide in store_to_guide.items():
-        g = safe_str(guide)
-        if g and g != "/" and "合计" not in g and "总计" not in g and g not in guide_names:
-            guide_names.append(g)
+def build_store_rows(df, products):
+    ordered_stores = list(OrderedDict.fromkeys(df["门店名称"].tolist()))
 
     rows = []
-    for g in guide_names:
-        p1 = result["guide"].get((g, "P1"), 0)
-        p2 = result["guide"].get((g, "P2"), 0)
-        rows.append({
-            "name": g,
-            "p1": p1,
-            "p2": p2,
-            "total": p1 + p2,
-        })
+    for store in ordered_stores:
+        sub = df[df["门店名称"] == store]
+        guide = safe_str(sub.iloc[0]["导购"]) if len(sub) > 0 else ""
+        row = {"门店名称": store, "导购": guide}
+        total = 0
+        for p in products:
+            qty = int((sub["产品归类"] == p).sum())
+            row[p] = qty
+            total += qty
+        row["合计"] = total
+        rows.append(row)
+
+    rows = sorted(rows, key=lambda x: x["合计"], reverse=True)
     return rows
 
 
-def format_report_text(title: str, p1_name: str, p2_name: str, customers, stores, store_to_guide, result, low_threshold=2):
-    region_p1 = result["region"].get("P1", 0)
-    region_p2 = result["region"].get("P2", 0)
-    total = region_p1 + region_p2
+def write_customer_sheet(ws, rows, products):
+    headers = ["客户名称"] + products + ["合计"]
+    for c, h in enumerate(headers, start=1):
+        ws.cell(1, c).value = h
 
-    cust_p1 = build_group_customer(customers, result, "P1")
-    cust_p2 = build_group_customer(customers, result, "P2")
-
-    store_rows = build_store_lines(stores, result)
-    guide_rows = build_guide_lines(store_to_guide, result)
-
-    top5 = sorted(store_rows, key=lambda x: x["total"], reverse=True)[:5]
-    low_rows = [x for x in store_rows if x["total"] < low_threshold]
-
-    lines = []
-    lines.append(title)
-    lines.append("")
-    lines.append("【区域整体】")
-    lines.append(f"{p1_name}：{region_p1}台")
-    lines.append(f"{p2_name}：{region_p2}台")
-    lines.append(f"合计：{total}台")
-    lines.append("")
-
-    lines.append("【客户】")
-    for grp in ["联启", "朝龙", "同文", "九机", "其他客户"]:
-        lines.append(f"{grp}：{p1_name}：{cust_p1[grp]}台，{p2_name}：{cust_p2[grp]}台")
-    lines.append("")
-
-    lines.append("【门店】")
-    for row in store_rows:
-        lines.append(f"{row['short']}：{p1_name}：{row['p1']}台，{p2_name}：{row['p2']}台")
-    lines.append("")
-
-    lines.append("【导购】")
-    for row in guide_rows:
-        lines.append(f"{row['name']}：{p1_name}：{row['p1']}台，{p2_name}：{row['p2']}台")
-    lines.append("")
-
-    lines.append("【TOP门店】")
-    if top5:
-        for row in top5:
-            lines.append(f"{row['short']}：{row['total']}台")
-    else:
-        lines.append("无")
-    lines.append("")
-
-    lines.append("【落后门店】")
-    if low_rows:
-        for row in low_rows:
-            lines.append(f"{row['short']}：{row['total']}台")
-    else:
-        lines.append("无")
-
-    return "\n".join(lines)
+    for r_idx, row in enumerate(rows, start=2):
+        ws.cell(r_idx, 1).value = row["客户名称"]
+        col = 2
+        for p in products:
+            ws.cell(r_idx, col).value = row[p]
+            col += 1
+        ws.cell(r_idx, col).value = row["合计"]
 
 
-def build_summary_text(p1_name, p2_name, day_result, d5_result, stores):
-    day_p1 = day_result["region"].get("P1", 0)
-    day_p2 = day_result["region"].get("P2", 0)
-    d5_p1 = d5_result["region"].get("P1", 0)
-    d5_p2 = d5_result["region"].get("P2", 0)
+def write_store_sheet(ws, rows, products):
+    headers = ["门店名称", "导购"] + products + ["合计"]
+    for c, h in enumerate(headers, start=1):
+        ws.cell(1, c).value = h
 
-    day_store_rows = build_store_lines(stores, day_result)
-    top5_day = sorted(day_store_rows, key=lambda x: x["total"], reverse=True)[:5]
-
-    top_txt = "、".join([f"{x['short']} {x['total']}台" for x in top5_day if x["total"] > 0]) or "无"
-
-    return (
-        f"首销日：{p1_name} {day_p1}台，{p2_name} {day_p2}台，合计 {day_p1 + day_p2}台\n"
-        f"首销5日：{p1_name} {d5_p1}台，{p2_name} {d5_p2}台，合计 {d5_p1 + d5_p2}台\n"
-        f"TOP门店：{top_txt}"
-    )
+    for r_idx, row in enumerate(rows, start=2):
+        ws.cell(r_idx, 1).value = row["门店名称"]
+        ws.cell(r_idx, 2).value = row["导购"]
+        col = 3
+        for p in products:
+            ws.cell(r_idx, col).value = row[p]
+            col += 1
+        ws.cell(r_idx, col).value = row["合计"]
 
 
-# ===================== 主处理流程 =====================
-
-def main_process(data_file, template_file, launch_date, p1_name, p2_name):
+def process_report(data_file, template_file, products):
     reset_log()
+    log(f"本次产品：{products}")
     log(f"模板：{template_file}")
     log(f"数据：{data_file}")
-    log(f"首销日期：{launch_date}")
-    log(f"产品1：{p1_name}")
-    log(f"产品2：{p2_name}")
 
-    copy_template_to_output(template_file)
+    if not os.path.exists(template_file):
+        raise FileNotFoundError(f"未找到模板文件：{template_file}")
 
-    wb, ws_customer, ws_store, customers, stores, store_to_guide = load_template(template_file)
-    df = read_data(data_file)
-    day_df, d5_df, _ = clean_and_match(df, customers, stores, store_to_guide, p1_name, p2_name, launch_date)
+    wb = load_workbook(template_file)
 
-    day_result = build_agg(day_df)
-    d5_result = build_agg(d5_df)
+    if CUSTOMER_SHEET not in wb.sheetnames:
+        raise ValueError(f"模板缺少工作表：{CUSTOMER_SHEET}")
+    if STORE_SHEET not in wb.sheetnames:
+        raise ValueError(f"模板缺少工作表：{STORE_SHEET}")
 
-    fill_customer_sheet(ws_customer, day_result, d5_result)
-    fill_store_sheet(ws_store, day_result, d5_result)
-    wb.save(OUTPUT_RESULT_XLSX)
+    ws_customer = wb[CUSTOMER_SHEET]
+    ws_store = wb[STORE_SHEET]
 
-    launch_dt = pd.to_datetime(launch_date).normalize()
-    end_5d = launch_dt + pd.Timedelta(days=4)
+    df = load_data(data_file, products)
+    log(f"有效记录数：{len(df)}")
 
-    report_day = format_report_text(
-        title=f"【首销通报】{format_dt_cn(launch_dt)}",
-        p1_name=p1_name,
-        p2_name=p2_name,
-        customers=customers,
-        stores=stores,
-        store_to_guide=store_to_guide,
-        result=day_result,
-    )
+    customer_rows = build_customer_rows(df, products)
+    store_rows = build_store_rows(df, products)
 
-    report_5day = format_report_text(
-        title=f"【首销通报】{format_dt_cn(launch_dt)}-{format_dt_cn(end_5d)}",
-        p1_name=p1_name,
-        p2_name=p2_name,
-        customers=customers,
-        stores=stores,
-        store_to_guide=store_to_guide,
-        result=d5_result,
-    )
+    log(f"客户数：{len(customer_rows)}")
+    log(f"门店数：{len(store_rows)}")
 
-    with open(OUTPUT_REPORT_TXT, "w", encoding="utf-8") as f:
-        f.write(report_day + "\n\n" + report_5day)
+    write_customer_sheet(ws_customer, customer_rows, products)
+    write_store_sheet(ws_store, store_rows, products)
 
-    summary = build_summary_text(p1_name, p2_name, day_result, d5_result, stores)
+    out_name = f"结果_{uuid4().hex[:8]}.xlsx"
+    out_path = os.path.join(OUTPUT_DIR, out_name)
+    wb.save(out_path)
 
     log("结果Excel输出完成")
-    log("文本通报输出完成")
-    log("标准销量表输出完成")
     log("全部完成")
 
-    return summary, report_day, report_5day
+    return {
+        "customer_rows": customer_rows,
+        "store_rows": store_rows,
+        "products": products,
+        "result_file": out_name,
+        "log_file": os.path.basename(LOG_FILE),
+    }
 
-
-# ===================== Flask 路由 =====================
 
 @app.route("/")
 def index():
@@ -574,71 +259,50 @@ def index():
 @app.route("/process", methods=["POST"])
 def process():
     try:
-        ensure_dirs()
+        ensure_dir()
 
         data_file = request.files.get("data_file")
         template_file = request.files.get("template_file")
-        launch_date = safe_str(request.form.get("launch_date"))
-        p1_name = safe_str(request.form.get("p1")) or "产品1"
-        p2_name = safe_str(request.form.get("p2")) or "产品2"
 
         if not data_file or not template_file:
             return jsonify({"ok": False, "msg": "请上传微服务原表和模板文件"})
 
-        if not data_file.filename or not template_file.filename:
-            return jsonify({"ok": False, "msg": "请选择文件"})
+        products = parse_products([
+            request.form.get("product1", ""),
+            request.form.get("product2", ""),
+            request.form.get("product3", ""),
+            request.form.get("product4", ""),
+        ])
 
-        if not launch_date:
-            return jsonify({"ok": False, "msg": "请选择首销日期"})
+        data_name = f"data_{uuid4().hex[:8]}_{data_file.filename}"
+        template_name = f"template_{uuid4().hex[:8]}_{template_file.filename}"
 
-        data_path = os.path.join(UPLOAD_DIR, data_file.filename)
-        template_path = os.path.join(UPLOAD_DIR, template_file.filename)
+        data_path = os.path.join(UPLOAD_DIR, data_name)
+        template_path = os.path.join(UPLOAD_DIR, template_name)
 
         data_file.save(data_path)
         template_file.save(template_path)
 
-        summary, report_day, report_5day = main_process(
-            data_file=data_path,
-            template_file=template_path,
-            launch_date=launch_date,
-            p1_name=p1_name,
-            p2_name=p2_name,
-        )
+        result = process_report(data_path, template_path, products)
 
         return jsonify({
             "ok": True,
             "msg": "处理完成",
-            "summary": summary,
-            "report_day": report_day,
-            "report_5day": report_5day,
+            **result
         })
 
     except Exception as e:
-        ensure_dirs()
-        err = str(e) + "\n" + traceback.format_exc()
+        err = str(e)
+        tb = traceback.format_exc()
         log(err)
+        log(tb)
         return jsonify({"ok": False, "msg": err})
 
 
 @app.route("/download/<path:filename>")
-def download(filename):
+def download_file(filename):
     return send_from_directory(OUTPUT_DIR, filename, as_attachment=True)
 
 
-@app.route("/download-template")
-def download_template():
-    if not os.path.exists(FIXED_TEMPLATE_FILE):
-        return jsonify({"ok": False, "msg": "标准模板不存在，请先在 assets 目录放入：通报模板.xlsx"}), 404
-
-    return send_from_directory(
-        ASSETS_DIR,
-        "通报模板.xlsx",
-        as_attachment=True
-    )
-
-
 if __name__ == "__main__":
-    ensure_dirs()
-    reset_log()
-    check_fixed_template()
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=10000)
