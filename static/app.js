@@ -111,8 +111,7 @@ function renderTable(containerId, rows, products, isStore = false) {
 function renderDownloads(resultFile, logFile) {
     const box = document.getElementById("downloads");
     box.innerHTML = `
-        <a class="download-btn" href="/download/${resultFile}" target="_blank">输出通报</a>
-        <a class="download-btn" href="#" onclick="alert('固定模板请直接使用本地模板文件'); return false;">固定模板</a>
+        <a class="download-btn" href="/download/${resultFile}" target="_blank">输出</a>
         <a class="download-btn" href="/download/${logFile}" target="_blank">运行日志</a>
     `;
 }
