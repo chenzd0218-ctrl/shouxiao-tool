@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-TEMPLATE_ASSET_PATH = os.path.join(ASSETS_DIR, "模板.xlsx")
+TEMPLATE_ASSET_PATH = os.path.join(ASSETS_DIR, "模版.xlsx")
 
 LOG_FILE = os.path.join(OUTPUT_DIR, "运行日志.txt")
 
@@ -327,18 +327,18 @@ def build_output_name(products):
 def process_report(data_file, template_file, products):
     reset_log()
     log(f"本次产品：{products}")
-    log(f"模板：{template_file}")
+    log(f"模版：{template_file}")
     log(f"数据：{data_file}")
 
     if not os.path.exists(template_file):
-        raise FileNotFoundError(f"未找到模板文件：{template_file}")
+        raise FileNotFoundError(f"未找到模版文件：{template_file}")
 
     wb = load_workbook(template_file)
 
     if CUSTOMER_SHEET not in wb.sheetnames:
-        raise ValueError(f"模板缺少工作表：{CUSTOMER_SHEET}")
+        raise ValueError(f"模版缺少工作表：{CUSTOMER_SHEET}")
     if STORE_SHEET not in wb.sheetnames:
-        raise ValueError(f"模板缺少工作表：{STORE_SHEET}")
+        raise ValueError(f"模版缺少工作表：{STORE_SHEET}")
 
     ws_customer = wb[CUSTOMER_SHEET]
     ws_store = wb[STORE_SHEET]
@@ -387,7 +387,7 @@ def process():
         template_file = request.files.get("template_file")
 
         if not data_file or not template_file:
-            return jsonify({"ok": False, "msg": "请上传微服务原表和模板文件"})
+            return jsonify({"ok": False, "msg": "请上传微服务原表和模版文件"})
 
         products = parse_products(
             [
@@ -429,12 +429,12 @@ def process():
 @app.route("/download-template")
 def download_template():
     if not os.path.exists(TEMPLATE_ASSET_PATH):
-        return "模板文件不存在", 404
+        return "模版文件不存在", 404
 
     return send_file(
         TEMPLATE_ASSET_PATH,
         as_attachment=True,
-        download_name="模板.xlsx",
+        download_name="模版.xlsx",
     )
 
 
